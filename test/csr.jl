@@ -27,6 +27,21 @@ facts("Test SparseMatrixCSR") do
             @fact_throws DimensionMismatch Ar*[1, 2]
             @fact_throws DimensionMismatch Base.A_mul_B!(1.0, Ar, x, 0.0, [1, 1, 1])
         end
+
+        context("CSR * StridedMatrix") do
+            x = [1 2; 3 4; 5 6]
+            @fact Ar*x --> [11 14; 1 2]
+            @fact Base.A_mul_B!(1.0, Ar, x, 0.0, [0 0; 0 0]) -->  [11 14; 1 2]
+            @fact Base.A_mul_B!(10.0, Ar, x, 0.0, rand(Int, 2, 2)) --> [110 140; 10 20]
+            @fact Base.A_mul_B!(10.0, Ar, x, 1.0, [1 1; 1 1]) --> [111 141; 11 21]
+            @fact Base.A_mul_B!(rand(Int, 2, 2), Ar, x) -->  [11 14; 1 2]
+
+            # check error throwing - Dimension mismatch for wrong size x or out
+            @fact_throws DimensionMismatch Ar*rand(Int, 2, 2)
+            @fact_throws DimensionMismatch Base.A_mul_B!(1.0, Ar, x, 0.0, rand(Int, 3, 2))
+            @fact_throws DimensionMismatch Base.A_mul_B!(1.0, Ar, x, 0.0, rand(Int, 2, 3))
+        end
+
     end
 end
 

@@ -108,26 +108,37 @@ Base.nnz(S::SparseMatrixCSR) = Int(S.rowptr[end] - 1)
 #     end
 # end
 
-function A_mul_B!{T}(α::Number, A::SparseMatrixCSR, B::StridedVector, β::Number,
-                     C::StridedVector{T})
-    A.m == size(C, 1) || throw(DimensionMismatch())
-    A.n == size(B, 1) || throw(DimensionMismatch())
+function A_mul_B!{T}(α::Number, A::SparseMatrixCSR, B::StridedVecOrMat,
+                     β::Number, C::StridedVecOrMat{T})
+    A.m == size(C, 1) || throw(DimensionMismatch("size(C, 1) != size(A, 1)"))
+    A.n == size(B, 1) || throw(DimensionMismatch("size(B, 1) != size(A, 2)"))
+    size(C, 2) == size(B, 2) || throw(DimensionMismatch("size(C, 2) != size(B, 2)"))
 
-    @inbounds for row=1:A.m
-        temp = zero(T)
-        @simd for j=A.rowptr[row]:A.rowptr[row+1]-1
-            temp += B[A.colval[j]] * A.nzval[j]
+    @inbounds begin
+        for k=1:size(C, 2)
+            for row=1:A.m
+                temp = zero(T)
+                @simd for j=A.rowptr[row]:A.rowptr[row+1]-1
+                    temp += B[A.colval[j], k] * A.nzval[j]
+                end
+                C[row, k] = α*temp + β*C[row, k]
+            end
         end
-        C[row] = α*temp + β*C[row]
-    end
+    end  # inbounds
     C
 end
 
 # API to be consistent with Base dense operations
-A_mul_B!{T}(C::StridedVector{T}, A::SparseMatrixCSR, B::StridedVector) =
+A_mul_B!{T}(C::StridedVecOrMat{T}, A::SparseMatrixCSR, B::StridedVecOrMat) =
     A_mul_B!(one(T), A, B, zero(T), C)
 
 function (*){T,S}(A::SparseMatrixCSR{T}, x::StridedVector{S})
     TS = promote_type(Base.LinAlg.arithtype(T), Base.LinAlg.arithtype(S))
     A_mul_B!(similar(x, TS, size(A, 1)), A, convert(AbstractVector{TS}, x))
+end
+
+function (*){T,S}(A::SparseMatrixCSR{T}, B::StridedMatrix{S})
+    TS = promote_type(Base.LinAlg.arithtype(T), Base.LinAlg.arithtype(S))
+    A_mul_B!(similar(B, TS, size(A, 1), size(B, 2)), A,
+             convert(AbstractMatrix{TS}, B))
 end
