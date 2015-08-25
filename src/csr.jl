@@ -480,6 +480,107 @@ function getindex{Tv,Ti}(A::SparseMatrixCSR{Tv,Ti}, I::AbstractVector,
     end
 end
 
+# logical getindex - the methods immediately below are to avoid ambiguity errors
+getindex(::SparseMatrixCSR, ::AbstractVector{Bool}, ::Range{Bool}) = error("Cannot index with Range{Bool}")
+getindex{T<:Integer}(::SparseMatrixCSR, ::AbstractVector{T}, ::Range{Bool}) = error("Cannot index with Range{Bool}")
+getindex(::SparseMatrixCSR, ::Range{Bool}, ::Range{Bool}) = error("cannot index with Range{Bool}")
+getindex{T<:Integer}(::SparseMatrixCSR, ::Range{T}, ::Range{Bool}) = error("Cannot index with Range{Bool}")
+
+getindex{T<:Integer}(A::SparseMatrixCSR, I::AbstractVector{Bool}, J::Range{T}) = A[find(I), J]
+getindex{T<:Integer}(A::SparseMatrixCSR, I::Range{T}, J::AbstractVector{Bool}) = A[I,find(J)]
+getindex(A::SparseMatrixCSR, I::Integer, J::AbstractVector{Bool}) = A[I,find(J)]
+getindex(A::SparseMatrixCSR, I::AbstractVector{Bool}, J::Integer) = A[find(I),J]
+getindex(A::SparseMatrixCSR, I::AbstractVector{Bool}, J::AbstractVector{Bool}) = A[find(I),find(J)]
+getindex{T<:Integer}(A::SparseMatrixCSR, I::AbstractVector{T}, J::AbstractVector{Bool}) = A[I,find(J)]
+getindex{T<:Integer}(A::SparseMatrixCSR, I::AbstractVector{Bool}, J::AbstractVector{T}) = A[find(I),J]
+
+
+function getindex{Tv}(A::SparseMatrixCSR{Tv}, I::AbstractArray{Bool})
+    checkbounds(A, I)
+    n = sum(I)
+
+    rowptrA = A.rowptr; colvalA = A.colval; nzvalA = A.nzval
+    rowptrB = Int[1,n+1]
+    colvalB = Array(Int, n)
+    nzvalB = Array(Tv, n)
+    c = 1
+    colB = 1
+
+    @inbounds for row in 1:A.m
+        c1 = rowptrA[row]
+        c2 = rowptrA[row+1]-1
+
+        for col in 1:A.n
+            if I[row, col]
+                while (c1 <= c2) && (colvalA[c1] < col)
+                    c1 += 1
+                end
+                if (c1 <= c2) && (colvalA[c1] == col)
+                    nzvalB[c] = nzvalA[c1]
+                    colvalB[c] = colB
+                    c += 1
+                end
+                colB += 1
+                (colB > n) && break
+            end
+        end
+        (colB > n) && break
+    end
+    rowptrB[end] = c
+    n = length(nzvalB)
+    if n > (c-1)
+        deleteat!(nzvalB, c:n)
+        deleteat!(colvalB, c:n)
+    end
+    SparseMatrixCSR(1, n, rowptrB, colvalB, nzvalB)
+end
+
+function getindex{Tv,Ti}(A::SparseMatrixCSR{Tv,Ti}, I::AbstractArray)
+    szA = size(A);
+    nA = szA[1] * szA[2]
+    rowptrA = A.rowptr
+    colvalA = A.colval
+    nzvalA = A.nzval
+
+    n = length(I)
+    outm = size(I, 1)
+    outn = size(I, 2)
+    szB = (outm, outn)
+    rowptrB = zeros(Int, outm+1)
+    colvalB = Array(Int, n)
+    nzvalB = Array(Tv, n)
+
+    rowB = colB = 1
+    rowptrB[rowB] = 1
+    idxB = 1
+
+    @inbounds for i in 1:n
+        ((I[i] < 1) | (I[i] > nA)) && throw(BoundsError())
+        rowA, colA = ind2sub(szA, I[i])
+        rowB, colB = ind2sub(szB, i)
+
+        for c in rowptrA[rowA]:(rowptrA[rowA+1]-1)
+            if colvalA[c] == colA
+                rowptrB[rowB+1] += 1
+                colvalB[idxB] = colB
+                nzvalB[idxB] = nzvalA[c]
+                idxB += 1
+                break
+            end
+        end
+    end
+
+    rowptrB = cumsum(rowptrB)
+
+    if n > (idxB-1)
+        deleteat!(nzvalB, idxB:n)
+        deleteat!(colvalB, idxB:n)
+    end
+
+    SparseMatrixCSR(outm, outn, rowptrB, colvalB, nzvalB)
+end
+
+
 Base.size(S::SparseMatrixCSR) = (S.m, S.n)
 Base.nnz(S::SparseMatrixCSR) = Int(S.rowptr[end] - 1)
 
