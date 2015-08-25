@@ -1,4 +1,5 @@
 import Base: *, A_mul_B!, Ac_mul_B!, At_mul_B!
+import Base: getindex, setindex!
 
 type SparseMatrixCSR{Tv,Ti<:Integer} <: AbstractSparseMatrix{Tv,Ti}
     m::Int                  # Number of rows
@@ -52,61 +53,57 @@ function Base.showarray(io::IO, S::SparseMatrixCSR;
     end
 end
 
+
+# algorithm based on scipy/sparse/sparsetools/csr.h
+function csr2csc{Tv,Ti}(indptr::Vector{Ti}, indval::Vector{Ti},
+                        nzval::Vector{Tv}, m::Int, n::Int)
+    # allocate
+    Bptr = zeros(Ti, n+1)
+    Bind = similar(indval)
+    Bval = similar(nzval)
+
+    numnz = indptr[m]
+
+    # get colptr by accumulating hits on colval and doing cumsum
+    @inbounds Bptr[1] = 1
+    @inbounds for n=1:numnz Bptr[indval[n]+1] += 1 end
+    Bptr = cumsum(Bptr)
+
+    @inbounds for row=1:m
+        for j=indptr[row]:(indptr[row+1]-1)
+            col = indval[j]
+            dest = Bptr[col]
+
+            Bind[dest] = row
+            Bval[dest] = nzval[j]
+            Bptr[col] += 1
+        end
+    end
+
+    # fix up Bp
+    last = 1
+    @inbounds for col=1:n
+        temp = Bptr[col]
+        Bptr[col] = last
+        last = temp
+    end
+    Bptr, Bind, Bval
+end
+
+function Base.convert{Tv,Ti<:Integer}(::Type{SparseMatrixCSC{Tv,Ti}},
+                                      A::SparseMatrixCSR{Tv,Ti})
+    Bptr, Bind, Bval = csr2csc(A.rowptr, A.colval, A.nzval, A.m, A.n)
+    SparseMatrixCSC(A.m, A.n, Bptr, Bind, Bval)
+end
+
+function Base.convert{Tv,Ti<:Integer}(::Type{SparseMatrixCSR{Tv,Ti}},
+                                      B::SparseMatrixCSC{Tv,Ti})
+    Aptr, Aind, Aval = csr2csc(B.colptr, B.rowval, B.nzval, B.n, B.m)
+    SparseMatrixCSR(B.m, B.n, Aptr, Aind, Aval)
+end
+
 Base.size(S::SparseMatrixCSR) = (S.m, S.n)
 Base.nnz(S::SparseMatrixCSR) = Int(S.rowptr[end] - 1)
-
-# NOTE:  copied/pasted from base
-# for (f, op, transp) in ((:A_mul_B, :identity, false),
-#                         (:Ac_mul_B, :ctranspose, true),
-#                         (:At_mul_B, :transpose, true))
-#     @eval begin
-#         function $(symbol(f,:!)){TC}(α::Number, A::SparseMatrixCSR, B::StridedVecOrMat, β::Number, C::StridedVecOrMat{TC})
-#             if $transp
-#                 A.n == size(C, 1) || throw(DimensionMismatch())
-#                 A.m == size(B, 1) || throw(DimensionMismatch())
-#             else
-#                 A.n == size(B, 1) || throw(DimensionMismatch())
-#                 A.m == size(C, 1) || throw(DimensionMismatch())
-#             end
-#             size(B, 2) == size(C, 2) || throw(DimensionMismatch())
-
-#             if β != 1
-#                 β != 0 ? scale!(C, β) : fill!(C, zero(eltype(C)))
-#             end
-
-#             nzval = A.nzval
-#             colval = A.colval
-#             rowptr = A.rowptr
-
-#             for row = 1:A.m
-#                 for k = 1:size(C, 2)
-#                     if $transp
-#                         tmp = zero(TC)
-#                         @inbounds for j = rowptr[row]:(rowptr[row+1] - 1)
-#                             tmp += $(op)(nzval[j])*B[colval[j], k]
-#                         end
-#                         C[col, k] += α*tmp
-#                     else
-#                         temp = β*C[row, k]
-#                         @inbounds for j = rowptr[row]:(rowptr[row+1] - 1)
-#                             C[rv[j], k] += nzv[j]*αxj
-#                         end
-#                     end
-#                 end
-#             end
-#             C
-#         end
-
-#         function $(f){TA,S,Tx}(A::SparseMatrixCSR{TA,S}, x::StridedVector{Tx})
-#             T = promote_type(TA, Tx)
-#             $(symbol(f,:!))(one(T), A, x, zero(T), similar(x, T, A.n))
-#         end
-#         function $(f){TA,S,Tx}(A::SparseMatrixCSR{TA,S}, B::StridedMatrix{Tx})
-#             T = promote_type(TA, Tx)
-#             $(symbol(f,:!))(one(T), A, B, zero(T), similar(B, T, (A.n, size(B, 2))))
-#         end
-#     end
-# end
 
 function A_mul_B!{T}(α::Number, A::SparseMatrixCSR, B::StridedVecOrMat,
                      β::Number, C::StridedVecOrMat{T})
