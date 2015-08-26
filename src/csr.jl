@@ -62,11 +62,11 @@ function csr2csc{Tv,Ti}(indptr::Vector{Ti}, indval::Vector{Ti},
     Bind = similar(indval)
     Bval = similar(nzval)
 
-    numnz = indptr[m]
+    numnz = indptr[m+1] - 1
 
     # get colptr by accumulating hits on colval and doing cumsum
     @inbounds Bptr[1] = 1
-    @inbounds for n=1:numnz Bptr[indval[n]+1] += 1 end
+    @inbounds for i=1:numnz Bptr[indval[i]+1] += 1; end
     Bptr = cumsum(Bptr)
 
     @inbounds for row=1:m
@@ -80,7 +80,7 @@ function csr2csc{Tv,Ti}(indptr::Vector{Ti}, indval::Vector{Ti},
         end
     end
 
-    # fix up Bp
+    # fix up Bptr
     last = 1
     @inbounds for col=1:n
         temp = Bptr[col]
