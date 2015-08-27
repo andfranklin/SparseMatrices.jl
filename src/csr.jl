@@ -24,6 +24,16 @@ function SparseMatrixCSR{Tv,Ti<:Integer}(I::AbstractVector{Ti},
     SparseMatrixCSR(nrow, ncol, rowptr, colval, nzval)
 end
 
+copy(S::SparseMatrixCSR) =
+    SparseMatrixCSR(S.m, S.n, copy(S.rowptr), copy(S.colval), copy(S.nzval))
+
+spzeros_csr(m::Integer, n::Integer) = spzeros_csr(Float64, m, n)
+spzeros_csr(Tv::Type, m::Integer, n::Integer) = spzeros_csr(Tv, Int, m, n)
+function spzeros_csr(Tv::Type, Ti::Type, m::Integer, n::Integer)
+    ((m < 0) || (n < 0)) && throw(ArgumentError("Invalid Array dimensions"))
+    SparseMatrixCSR(m, n, ones(Ti, m+1), Array(Ti, 0), Array(Tv, 0))
+end
+
 # NOTE:  copied/pasted from base. Modified slightly
 function Base.showarray(io::IO, S::SparseMatrixCSR;
                         header::Bool=true, limit::Bool=Base._limit_output,
@@ -52,7 +62,6 @@ function Base.showarray(io::IO, S::SparseMatrixCSR;
         k += 1
     end
 end
-
 
 # algorithm based on scipy/sparse/sparsetools/csr.h
 function csr2csc{Tv,Ti}(indptr::Vector{Ti}, indval::Vector{Ti},
@@ -90,13 +99,13 @@ function csr2csc{Tv,Ti}(indptr::Vector{Ti}, indval::Vector{Ti},
     Bptr, Bind, Bval
 end
 
-function Base.convert{Tv,Ti<:Integer}(::Type{SparseMatrixCSC{Tv,Ti}},
+function Base.convert{Tv,Ti<:Integer}(::Type{SparseMatrixCSC},
                                       A::SparseMatrixCSR{Tv,Ti})
     Bptr, Bind, Bval = csr2csc(A.rowptr, A.colval, A.nzval, A.m, A.n)
     SparseMatrixCSC(A.m, A.n, Bptr, Bind, Bval)
 end
 
-function Base.convert{Tv,Ti<:Integer}(::Type{SparseMatrixCSR{Tv,Ti}},
+function Base.convert{Tv,Ti<:Integer}(::Type{SparseMatrixCSR},
                                       B::SparseMatrixCSC{Tv,Ti})
     Aptr, Aind, Aval = csr2csc(B.colptr, B.rowval, B.nzval, B.n, B.m)
     SparseMatrixCSR(B.m, B.n, Aptr, Aind, Aval)
@@ -204,7 +213,6 @@ function getindex{Tv,Ti<:Integer}(A::SparseMatrixCSR{Tv,Ti},
 
     return SparseMatrixCSR(nI, nJ, rowptrS, colvalS, nzvalS)
 end
-
 
 function getindex_J_sorted{Tv,Ti}(A::SparseMatrixCSR{Tv,Ti}, I::AbstractVector,
                                   J::AbstractVector)
@@ -494,7 +502,6 @@ getindex(A::SparseMatrixCSR, I::AbstractVector{Bool}, J::AbstractVector{Bool}) =
 getindex{T<:Integer}(A::SparseMatrixCSR, I::AbstractVector{T}, J::AbstractVector{Bool}) = A[I,find(J)]
 getindex{T<:Integer}(A::SparseMatrixCSR, I::AbstractVector{Bool}, J::AbstractVector{T}) = A[find(I),J]
 
-
 function getindex{Tv}(A::SparseMatrixCSR{Tv}, I::AbstractArray{Bool})
     checkbounds(A, I)
     n = sum(I)
@@ -580,7 +587,6 @@ function getindex{Tv,Ti}(A::SparseMatrixCSR{Tv,Ti}, I::AbstractArray)
     SparseMatrixCSR(outm, outn, rowptrB, colvalB, nzvalB)
 end
 
-
 Base.size(S::SparseMatrixCSR) = (S.m, S.n)
 Base.nnz(S::SparseMatrixCSR) = Int(S.rowptr[end] - 1)
 
@@ -617,4 +623,46 @@ function (*){T,S}(A::SparseMatrixCSR{T}, B::StridedMatrix{S})
     TS = promote_type(Base.LinAlg.arithtype(T), Base.LinAlg.arithtype(S))
     A_mul_B!(similar(B, TS, size(A, 1), size(B, 2)), A,
              convert(AbstractMatrix{TS}, B))
+end
+
+function row_kron{TvA,TiA,TvB,TiB}(A::SparseMatrixCSR{TvA,TiA},
+                                   B::SparseMatrixCSR{TvB,TiB})
+    TvS = promote_type(Base.LinAlg.arithtype(TvA), Base.LinAlg.arithtype(TvB))
+    TiS = promote_type(TiA, TiB)
+
+    mA, nA = size(A)
+    mB, nB = size(B)
+
+    mA == mB || error(DimensionMismatch("A and B must have same number of rows"))
+
+    rowptrA = A.rowptr; colvalA = A.colval; nzvalA = A.nzval
+    rowptrB = B.rowptr; colvalB = B.colval; nzvalB = B.nzval
+
+    rowptrS = Array(TiS, mA+1)
+    colvalS = Array(TiS, nA*nB)  # overallocate then deleteat! to avoid cache misses
+    nzvalS = Array(TvS, nA*nB)
+
+    rowptrS[1] = 1
+    ptrS = 1
+    @inbounds for row = 1:mA
+        cindA = rowptrA[row]:rowptrA[row+1]-1
+        cindB = rowptrB[row]:rowptrB[row+1]-1
+
+        for ca in cindA
+            for cb in cindB
+                colvalS[ptrS] = (colvalA[ca]-1)*nB + colvalB[cb]
+                nzvalS[ptrS] = nzvalB[cb]*nzvalA[ca]
+                ptrS += 1
+            end
+        end
+
+        rowptrS[row+1] = ptrS
+    end
+
+    if nA*nB > (ptrS-1)
+        deleteat!(nzvalS, ptrS:nA*nB)
+        deleteat!(colvalS, ptrS:nA*nB)
+    end
+
+    SparseMatrixCSR(mA, nA*nB, rowptrS, colvalS, nzvalS)
 end
